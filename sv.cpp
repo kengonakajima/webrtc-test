@@ -440,6 +440,7 @@ public:
                        //    message1 = message;
                        //    cond.notify_all();
                        std::cout << "on_message:" + message << std::endl;
+                       send(message);
                    });
 
         on_sdp([&](const std::string &sdp) {

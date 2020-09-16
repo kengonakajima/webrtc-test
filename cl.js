@@ -22,33 +22,34 @@ let dataChannel = null;
 const pingTimes = {};
 const pingLatency = {};
 let pingCount = 0;
-const PINGS_PER_SECOND = 20;
-const SECONDS_TO_PING = 20;
+const PINGS_PER_SECOND = 2;
+const SECONDS_TO_PING = 10;
 let pingInterval;
 let startTime;
 
 // Callback for when we receive a message on the data channel.
 function onDataChannelMessage(event) {
-  const key = event.data;
-  pingLatency[key] = performance.now() - pingTimes[key];
+    const key = utf8ArrayToString(new Uint8Array(event.data));
+    console.log("onDataChannelMessage:",key);
+    pingLatency[key] = performance.now() - pingTimes[key];
 }
 
 // Callback for when the data channel was successfully opened.
 function onDataChannelOpen() {
-  console.log('Data channel opened!');
+    console.log('Data channel opened!');
 }
 
 // Callback for when the STUN server responds with the ICE candidates.
 function onIceCandidate(event) {
-  if (event && event.candidate) {
-    webSocketConnection.send(JSON.stringify({type: 'candidate', payload: event.candidate}));
-  }
+    if (event && event.candidate) {
+        webSocketConnection.send(JSON.stringify({type: 'candidate', payload: event.candidate}));
+    }
 }
 
 // Callback for when the SDP offer was successfully created.
 function onOfferCreated(description) {
-  rtcPeerConnection.setLocalDescription(description);
-  webSocketConnection.send(JSON.stringify({type: 'offer', payload: description}));
+    rtcPeerConnection.setLocalDescription(description);
+    webSocketConnection.send(JSON.stringify({type: 'offer', payload: description}));
 }
 
 // Callback for when the WebSocket is successfully opened.
@@ -130,6 +131,7 @@ function printLatency() {
 }
 
 function sendDataChannelPing() {
+    console.log("sendDataChannelPing");    
     const key = pingCount + '';
     pingTimes[key] = performance.now();
     dataChannel.send(key);
@@ -157,6 +159,6 @@ function sendWebSocketPing() {
 // Pings the server via the DataChannel once the connection has been established.
 function ping() {
     startTime = performance.now();
-    // pingInterval = setInterval(sendDataChannelPing, 1000.0 / PINGS_PER_SECOND);
-    pingInterval = setInterval(sendWebSocketPing, 1000.0 / PINGS_PER_SECOND);
+    pingInterval = setInterval(sendDataChannelPing, 1000.0 / PINGS_PER_SECOND);
+//    pingInterval = setInterval(sendWebSocketPing, 1000.0 / PINGS_PER_SECOND);
 }
