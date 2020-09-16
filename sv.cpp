@@ -10,6 +10,12 @@
 #include <rtc_base/thread.h>
 #include <system_wrappers/include/field_trial.h>
 
+// signaling via websocket
+#include "rapidjson/document.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/writer.h"
+
+
 #include "mrs3.h"
 
 struct Ice {
@@ -385,12 +391,113 @@ class Wrapper {
   }
 };
 
+/////////////////
+
+class Client : public Wrapper {
+public:
+    MrsConnectionId wsconnid;
+    Client(std::string wrname, MrsConnectionId c) : Wrapper(wrname), wsconnid(c) {
+        init();
+        on_accept_ice([&]() {
+                          //                             std::lock_guard<std::mutex> lock(mtx);
+                          //                             ice_flg1 = true;
+                          //                             cond.notify_all();
+                          std::cout << "on_accept_ice" << std::endl;
+                      });
+
+        //        std::list<Ice> ice_list;
+        on_ice([&](const Ice &ice) {
+                   //                       std::lock_guard<std::mutex> lock(mtx);
+                   //         ice_list.push_back(ice);
+                   //                       cond.notify_all();
+                   std::cout << "on_ice candidate:" << ice.candidate <<  std::endl;
+
+                   rapidjson::Document doc;
+                   doc.SetObject();
+                   doc.AddMember("type","candidate",doc.GetAllocator());
+                   rapidjson::Value cand_value;
+                   cand_value.SetString(rapidjson::StringRef(ice.candidate.c_str()));
+                   rapidjson::Value sdp_mid_value;
+                   sdp_mid_value.SetString(rapidjson::StringRef(ice.sdp_mid.c_str()));
+                   rapidjson::Value payload;
+                   payload.SetObject();
+                   payload.AddMember("candidate",cand_value,doc.GetAllocator());
+                   payload.AddMember("sdpMid",sdp_mid_value, doc.GetAllocator());
+                   payload.AddMember("sdpMLineIndex",ice.sdp_mline_index, doc.GetAllocator());
+                   doc.AddMember("payload",payload,doc.GetAllocator());
+                   rapidjson::StringBuffer strbuf;
+                   rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+                   doc.Accept(writer);
+                   std::string payloadstr = strbuf.GetString();
+                   int wr=mrs_send_ws_raw(wsconnid,payloadstr.c_str(),payloadstr.size());
+                   mrs_print("on_ice mrs_send_ws_raw ret:%d",wr);
+                   
+               });
+    
+
+        on_message([&](const std::string &message) {
+                       //                          std::lock_guard<std::mutex> lock(mtx);
+                       //    message1 = message;
+                       //    cond.notify_all();
+                       std::cout << "on_message:" + message << std::endl;
+                   });
+
+        on_sdp([&](const std::string &sdp) {
+                   std::cout << "on_sdp. sdp:" << sdp << std::endl;
+                   rapidjson::Document doc;
+                   doc.SetObject();
+                   doc.AddMember("type","answer",doc.GetAllocator());
+                   rapidjson::Value sdp_value;
+                   sdp_value.SetString(rapidjson::StringRef(sdp.c_str()));
+                   rapidjson::Value payload;
+                   payload.SetObject();
+                   payload.AddMember("type","answer",doc.GetAllocator());
+                   payload.AddMember("sdp",sdp_value,doc.GetAllocator());
+                   doc.AddMember("payload",payload,doc.GetAllocator());
+                   rapidjson::StringBuffer strbuf;
+                   rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+                   doc.Accept(writer);
+                   std::string payloadstr = strbuf.GetString();
+                   int wr=mrs_send_ws_raw(wsconnid,payloadstr.c_str(),payloadstr.size());
+                   mrs_print("on_sdp_send_ws_raw ret:%d",wr);
+                    //                      std::lock_guard<std::mutex> lock(mtx);
+                    //                      offer_sdp = sdp;
+                    //                      cond.notify_all();
+                });
+
+        on_success([&]() {
+                       //                          std::lock_guard<std::mutex> lock(mtx);
+                       std::cout << "on_success" << std::endl;
+                       //                          success_flg1 = true;
+                       //                          cond.notify_all();
+                   });
+        
+    }
+};
+
+
 void on_read_ws_raw_cb( MrsConnectionId connid, const char *data, uint32_t data_len) {
     mrs_print("@@ on_read_ws_raw_cb connid:%llx len:%d", connid, data_len );
-    int32_t wr=mrs_send_ws_raw(connid,data,data_len);
-    if(wr<=0) {
-        mrs_print("send_ws_raw error ret:%d",wr);
+    //mrs_dumpbin(data,data_len);
+    mrs_print("WS Raw Data: '%.*s'",data_len,data);
+    rapidjson::Document doc;
+    doc.Parse(data,data_len); // TODO: error check
+    std::string type = doc["type"].GetString();
+
+    if(type=="ping") {
+        mrs_print("PPPPPPPPPPPPPPPPPPPPPPPPING from websocket");
+        int32_t wr=mrs_send_ws_raw(connid,data,data_len);
+        if(wr<=0) mrs_print("send_ws_raw error ret:%d",wr);
+    } else if(type=="offer") {
+        std::string offer_sdp = doc["payload"]["sdp"].GetString();
+        mrs_print("Received offer, SDP:'%s'",offer_sdp.c_str());
+        Client *cl = (Client*)mrs_connection_get_data(connid);
+        cl->create_answer_sdp(offer_sdp);
+        
+
     }
+    
+
 }
 
 void on_disconnect_cb(MrsConnectionId connid) {
@@ -400,6 +507,8 @@ void on_accept_cb( MrsServerId svid, MrsConnectionId newconnid) {
     mrs_print("@@ on_accept_cb svid:%llx cl_connid:%llx",svid,newconnid);
     mrs_set_read_ws_raw_callback(newconnid, on_read_ws_raw_cb);
     mrs_set_disconnect_callback(newconnid, on_disconnect_cb);
+    Client *cl = new Client("webrtc",newconnid);
+    mrs_connection_set_data(newconnid,cl);
 }
 
 void on_transport_accept_cb( MrsServerId svid, MrsConnectionId newconnid) {
@@ -410,48 +519,7 @@ void on_transport_accept_cb( MrsServerId svid, MrsConnectionId newconnid) {
 int main(int argc, char *argv[]) {
     webrtc::field_trial::InitFieldTrialsFromString("");
     rtc::InitializeSSL();
-
-    Wrapper webrtc("webrtc");
-    webrtc.init();
-
-    webrtc.on_accept_ice([&]() {
-                             //                             std::lock_guard<std::mutex> lock(mtx);
-                             //                             ice_flg1 = true;
-                             //                             cond.notify_all();
-                             std::cout << "on_accept_ice" << std::endl;
-                         });
-
-    std::list<Ice> ice_list;
-
-    webrtc.on_ice([&](const Ice &ice) {
-                       //                       std::lock_guard<std::mutex> lock(mtx);
-                       ice_list.push_back(ice);
-                       //                       cond.notify_all();
-                       std::cout << "on_ice" << std::endl;
-                   });
     
-
-    webrtc.on_message([&](const std::string &message) {
-                          //                          std::lock_guard<std::mutex> lock(mtx);
-                          //    message1 = message;
-                          //    cond.notify_all();
-                          std::cout << "on_message:" + message << std::endl;
-                      });
-
-    std::string offer_sdp;
-    webrtc.on_sdp([&](const std::string &sdp) {
-                      std::cout << "got offer sdp" << std::endl;
-                      //                      std::lock_guard<std::mutex> lock(mtx);
-                      //                      offer_sdp = sdp;
-                      //                      cond.notify_all();
-                  });
-
-    webrtc.on_success([&]() {
-                          //                          std::lock_guard<std::mutex> lock(mtx);
-                          std::cout << "on_success" << std::endl;
-                          //                          success_flg1 = true;
-                          //                          cond.notify_all();
-                      });
     
 
     // signaling server

@@ -10,7 +10,8 @@
  */
 
 // URL to the server with the port we are using for WebSockets.
-const webSocketUrl = 'ws://54.191.242.239:8080';
+//const webSocketUrl = 'ws://54.191.242.239:8080';
+const webSocketUrl = 'ws://127.0.0.1:23456';
 // The WebSocket object used to manage a connection.
 let webSocketConnection = null;
 // The RTCPeerConnection through which we engage in the SDP handshake.
@@ -52,77 +53,110 @@ function onOfferCreated(description) {
 
 // Callback for when the WebSocket is successfully opened.
 function onWebSocketOpen() {
-  const config = { iceServers: [{ url: 'stun:stun.l.google.com:19302' }] };
-  rtcPeerConnection = new RTCPeerConnection(config);
-  const dataChannelConfig = { ordered: false, maxRetransmits: 0 };
-  dataChannel = rtcPeerConnection.createDataChannel('dc', dataChannelConfig);
-  dataChannel.onmessage = onDataChannelMessage;
-  dataChannel.onopen = onDataChannelOpen;
-  const sdpConstraints = {
-    mandatory: {
-      OfferToReceiveAudio: false,
-      OfferToReceiveVideo: false,
-    },
-  };
-  rtcPeerConnection.onicecandidate = onIceCandidate;
-  rtcPeerConnection.createOffer(onOfferCreated, () => {}, sdpConstraints);
+    const config = { iceServers: [{ url: 'stun:stun.l.google.com:19302' }] };
+    rtcPeerConnection = new RTCPeerConnection(config);
+    const dataChannelConfig = { ordered: false, maxRetransmits: 0 };
+    dataChannel = rtcPeerConnection.createDataChannel('dc', dataChannelConfig);
+    dataChannel.onmessage = onDataChannelMessage;
+    dataChannel.onopen = onDataChannelOpen;
+    const sdpConstraints = {
+        mandatory: {
+            OfferToReceiveAudio: false,
+            OfferToReceiveVideo: false,
+        },
+    };
+    rtcPeerConnection.onicecandidate = onIceCandidate;
+    rtcPeerConnection.createOffer(onOfferCreated, () => {}, sdpConstraints);
+    console.log("onwebsocketopen: rtcPeerConnection:",rtcPeerConnection, dataChannel);
+}
+
+function utf8ArrayToString(aBytes) {
+    var sView = "";
+    
+    for (var nPart, nLen = aBytes.length, nIdx = 0; nIdx < nLen; nIdx++) {
+        nPart = aBytes[nIdx];
+        
+        sView += String.fromCharCode(
+            nPart > 251 && nPart < 254 && nIdx + 5 < nLen ? /* six bytes */
+                /* (nPart - 252 << 30) may be not so safe in ECMAScript! So...: */
+                (nPart - 252) * 1073741824 + (aBytes[++nIdx] - 128 << 24) + (aBytes[++nIdx] - 128 << 18) + (aBytes[++nIdx] - 128 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+            : nPart > 247 && nPart < 252 && nIdx + 4 < nLen ? /* five bytes */
+                (nPart - 248 << 24) + (aBytes[++nIdx] - 128 << 18) + (aBytes[++nIdx] - 128 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+            : nPart > 239 && nPart < 248 && nIdx + 3 < nLen ? /* four bytes */
+                (nPart - 240 << 18) + (aBytes[++nIdx] - 128 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+            : nPart > 223 && nPart < 240 && nIdx + 2 < nLen ? /* three bytes */
+                (nPart - 224 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+            : nPart > 191 && nPart < 224 && nIdx + 1 < nLen ? /* two bytes */
+                (nPart - 192 << 6) + aBytes[++nIdx] - 128
+            : /* nPart < 127 ? */ /* one byte */
+                nPart
+        );
+    }
+    
+    return sView;
 }
 
 // Callback for when we receive a message from the server via the WebSocket.
 function onWebSocketMessage(event) {
-  const messageObject = JSON.parse(event.data);
-  if (messageObject.type === 'ping') {
-    const key = messageObject.payload;
-    pingLatency[key] = performance.now() - pingTimes[key];
-  } else if (messageObject.type === 'answer') {
-    rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(messageObject.payload));
-  } else if (messageObject.type === 'candidate') {
-    rtcPeerConnection.addIceCandidate(new RTCIceCandidate(messageObject.payload));
-  } else {
-    console.log('Unrecognized WebSocket message type.');
-  }
+    var s=utf8ArrayToString(new Uint8Array(event.data));
+    console.log("onwebsocketmessage: event:",event,event.data,s);
+
+    const messageObject = JSON.parse(s);
+    if (messageObject.type === 'ping') {
+        const key = messageObject.payload;
+        pingLatency[key] = performance.now() - pingTimes[key];
+    } else if (messageObject.type === 'answer') {
+        console.log("ANSWER:",messageObject);
+        rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(messageObject.payload));
+    } else if (messageObject.type === 'candidate') {
+        rtcPeerConnection.addIceCandidate(new RTCIceCandidate(messageObject.payload));
+    } else {
+        console.log('Unrecognized WebSocket message type.');
+    }
 }
 
 // Connects by creating a new WebSocket connection and associating some callbacks.
 function connect() {
-  webSocketConnection = new WebSocket(webSocketUrl);
-  webSocketConnection.onopen = onWebSocketOpen;
-  webSocketConnection.onmessage = onWebSocketMessage;
+    webSocketConnection = new WebSocket(webSocketUrl);
+    webSocketConnection.binaryType = "arraybuffer";
+    webSocketConnection.onopen = onWebSocketOpen;
+    webSocketConnection.onmessage = onWebSocketMessage;
 }
 
 function printLatency() {
-  for (let i = 0; i < PINGS_PER_SECOND * SECONDS_TO_PING; i++) {
-    console.log(i + ': ' + pingLatency[i + '']);
-  }
+    for (let i = 0; i < PINGS_PER_SECOND * SECONDS_TO_PING; i++) {
+        console.log(i + ': ' + pingLatency[i + '']);
+    }
 }
 
 function sendDataChannelPing() {
-  const key = pingCount + '';
-  pingTimes[key] = performance.now();
-  dataChannel.send(key);
-  pingCount++;
-  if (pingCount === PINGS_PER_SECOND * SECONDS_TO_PING) {
-    clearInterval(pingInterval);
-    console.log('total time: ' + (performance.now() - startTime));
-    setTimeout(printLatency, 10000);
-  }
+    const key = pingCount + '';
+    pingTimes[key] = performance.now();
+    dataChannel.send(key);
+    pingCount++;
+    if (pingCount === PINGS_PER_SECOND * SECONDS_TO_PING) {
+        clearInterval(pingInterval);
+        console.log('total time: ' + (performance.now() - startTime));
+        setTimeout(printLatency, 10000);
+    }
 }
 
 function sendWebSocketPing() {
-  const key = pingCount + '';
-  pingTimes[key] = performance.now();
-  webSocketConnection.send(JSON.stringify({type: 'ping', payload: key}));
-  pingCount++;
-  if (pingCount === PINGS_PER_SECOND * SECONDS_TO_PING) {
-    clearInterval(pingInterval);
-    console.log('total time: ' + (performance.now() - startTime));
-    setTimeout(printLatency, 10000);
-  }
+    console.log("sendWebSocketPing");
+    const key = pingCount + '';
+    pingTimes[key] = performance.now();
+    webSocketConnection.send(JSON.stringify({type: 'ping', payload: key}));
+    pingCount++;
+    if (pingCount === PINGS_PER_SECOND * SECONDS_TO_PING) {
+        clearInterval(pingInterval);
+        console.log('total time: ' + (performance.now() - startTime));
+        setTimeout(printLatency, 10000);
+    }
 }
 
 // Pings the server via the DataChannel once the connection has been established.
 function ping() {
-  startTime = performance.now();
-  // pingInterval = setInterval(sendDataChannelPing, 1000.0 / PINGS_PER_SECOND);
-  pingInterval = setInterval(sendWebSocketPing, 1000.0 / PINGS_PER_SECOND);
+    startTime = performance.now();
+    // pingInterval = setInterval(sendDataChannelPing, 1000.0 / PINGS_PER_SECOND);
+    pingInterval = setInterval(sendWebSocketPing, 1000.0 / PINGS_PER_SECOND);
 }
